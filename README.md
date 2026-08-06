@@ -1,4 +1,4 @@
-# WTFD Turnout Gear Management — Version 12
+# WTFD Turnout Gear Management — Version 31
 
 A standalone Cloudflare Worker + React application using the existing OperativeIQ turnout-gear preview source.
 
