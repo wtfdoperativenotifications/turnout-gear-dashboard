@@ -1,9 +1,0 @@
-# Deployment Order — Versions 15 and 16
-
-1. Deploy `wtfd-operative-preview-v16` to the existing Operative preview Worker repository.
-2. Wait for Cloudflare to complete that deployment.
-3. Deploy `turnout-gear-dashboard-v16` to the standalone dashboard repository.
-4. Hard refresh the dashboard.
-5. Open Supplies. If quantities are unavailable, open the preview Worker `/probe-supply-inventory` route with the existing bearer token and review the returned source fields.
-
-No new Cloudflare variables or secrets are required. The dashboard derives the supply URL from the existing TURNOUT_GEAR_SOURCE_URL.
