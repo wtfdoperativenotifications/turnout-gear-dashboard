@@ -1,0 +1,60 @@
+name: Apply Phoenix refresh and dedupe fix
+on:
+  push:
+    branches:
+      - fix/phoenix-refresh-dedupe
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Apply fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          app=Path('src/App.tsx')
+          s=app.read_text()
+          s=s.replace('const isPhoenixAsset = (asset:GearAsset) => /phoenix\\s*gear\\s*repair\\s*supply\\s*room/i.test(`${asset.currentLocation} ${asset.assignedTo}`);', 'const isPhoenixAsset = (asset:GearAsset) => /phoenix.*(?:gear.*)?repair|(?:gear.*)?repair.*phoenix/i.test(`${asset.currentLocation} ${asset.assignedTo}`);')
+          old='  const load=async()=>{setLoading(true);setError("");try{const r=await fetch("/api/dashboard");if(!r.ok)throw new Error(`Dashboard request failed (${r.status})`);setData(await r.json())}catch(e){setError(e instanceof Error?e.message:"Unable to load dashboard")}finally{setLoading(false)}};'
+          new='  const load=async()=>{setLoading(true);setError("");const controller=new AbortController();const timeout=window.setTimeout(()=>controller.abort(),15000);try{const r=await fetch("/api/dashboard",{signal:controller.signal,cache:"no-store"});if(!r.ok)throw new Error(`Dashboard request failed (${r.status})`);setData(await r.json())}catch(e){setError(e instanceof DOMException&&e.name==="AbortError"?"Dashboard refresh timed out. The previous data is still shown; try again in a moment.":e instanceof Error?e.message:"Unable to load dashboard")}finally{window.clearTimeout(timeout);setLoading(false)}};'
+          if old not in s: raise SystemExit('load function pattern not found')
+          s=s.replace(old,new)
+          app.write_text(s)
+
+          worker=Path('src/worker.ts')
+          w=worker.read_text()
+          w=w.replace('  return /phoenix\\s*gear\\s*repair\\s*supply\\s*room/i.test(`${asset.currentLocation} ${asset.assignedTo}`);', '  return /phoenix.*(?:gear.*)?repair|(?:gear.*)?repair.*phoenix/i.test(`${asset.currentLocation} ${asset.assignedTo}`);')
+          anchor='function authHeaders(env: Env): { headers: Headers; mode: string } {'
+          helper='''function dedupeGear(items: GearAsset[]): GearAsset[] {\n  const map = new Map<string, GearAsset>();\n  for (const item of items) {\n    const key = canonicalKey(item.assetTag || item.serialNumber || item.barcode || item.assetDescription);\n    if (!key) continue;\n    const existing = map.get(key);\n    if (!existing) { map.set(key, item); continue; }\n    // A Phoenix row represents the active out-for-repair/inspection state and wins\n    // over a stale warehouse/member row for the same serialized garment.\n    if (isPhoenixAsset(item) && !isPhoenixAsset(existing)) { map.set(key, item); continue; }\n    const existingKnown = existing.currentLocation && existing.currentLocation !== "Unknown";\n    const itemKnown = item.currentLocation && item.currentLocation !== "Unknown";\n    if (itemKnown && !existingKnown) map.set(key, item);\n  }\n  return [...map.values()];\n}\n\n'''
+          if 'function dedupeGear(items: GearAsset[])' not in w:
+            w=w.replace(anchor,helper+anchor)
+          w=w.replace('      const normalized = merged.map(normalize).filter(item => pattern.test(`${item.assetDescription} ${item.gearType}`));', '      const normalized = dedupeGear(merged.map(normalize).filter(item => pattern.test(`${item.assetDescription} ${item.gearType}`)));')
+          w=w.replace('    const normalized = discovered.rows.map(normalize).filter(item => pattern.test(`${item.assetDescription} ${item.gearType}`));', '    const normalized = dedupeGear(discovered.rows.map(normalize).filter(item => pattern.test(`${item.assetDescription} ${item.gearType}`)));')
+          worker.write_text(w)
+          PY
+      - name: Verify fix
+        run: |
+          grep -q 'Dashboard refresh timed out' src/App.tsx
+          grep -q 'function dedupeGear' src/worker.ts
+          grep -q 'phoenix.*repair' src/worker.ts
+      - name: Install and build
+        run: |
+          npm ci
+          npm run check
+          npm run build
+      - name: Commit patched files
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/App.tsx src/worker.ts
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Stabilize Phoenix status and dashboard refresh'
+          git push
