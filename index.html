@@ -9,6 +9,47 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      (() => {
+        const explainDiagnostic = () => {
+          const diagnostic = document.querySelector('.diagnostic');
+          if (!diagnostic) return;
+          const title = diagnostic.querySelector('.diagnostic-title b');
+          const detail = diagnostic.querySelector('.diagnostic-title span');
+          if (!title || !detail) return;
+
+          const raw = (detail.textContent || '').trim();
+          const lower = raw.toLowerCase();
+
+          if (/legacy preview worker returned http 500/.test(lower)) {
+            title.textContent = 'Turnout gear source is temporarily unavailable';
+            detail.textContent = 'The dashboard is online, but the upstream OperativeIQ preview Worker returned HTTP 500. Check wtfd-operative-preview Observability logs for the specific endpoint error.';
+          } else if (/rejected the credentials|authentication_failed|http 401|http 403/.test(lower)) {
+            title.textContent = 'OperativeIQ authentication needs attention';
+            detail.textContent = 'The dashboard is online, but the turnout gear data source rejected its credentials. Verify the OperativeIQ client credentials and Worker secrets.';
+          } else if (/not configured|neither direct operativeiq nor the legacy preview source/.test(lower)) {
+            title.textContent = 'Turnout gear data source is not configured';
+            detail.textContent = 'The dashboard is online, but no OperativeIQ turnout gear source is configured for this deployment.';
+          } else if (/invalid json/.test(lower)) {
+            title.textContent = 'Turnout gear source returned an unexpected response';
+            detail.textContent = 'The upstream source responded, but the dashboard could not read the response as JSON. Check the preview Worker logs and response body.';
+          } else if (/no asset record array|no_records/.test(lower)) {
+            title.textContent = 'OperativeIQ responded but no gear records were found';
+            detail.textContent = 'The data source is reachable, but the response did not contain a recognizable turnout gear record set. Review the source schema or endpoint.';
+          } else if (/none matched the turnout gear filter|no_matches/.test(lower)) {
+            title.textContent = 'OperativeIQ returned data, but no turnout gear matched';
+            detail.textContent = 'The source is reachable, but the returned records did not match the configured turnout gear filter. Review the category/filter mapping.';
+          } else if (/source error|source_unavailable|failed|http 5\d\d/.test(lower)) {
+            title.textContent = 'Turnout gear data source is unavailable';
+            detail.textContent = `${raw} The dashboard itself is online; check the upstream Worker or OperativeIQ endpoint logs for the underlying error.`;
+          }
+        };
+
+        const observer = new MutationObserver(explainDiagnostic);
+        observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+        window.addEventListener('DOMContentLoaded', explainDiagnostic);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
