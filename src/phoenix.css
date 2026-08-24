@@ -1,4 +1,5 @@
 /* Phoenix Gear Repair / Inspection status tile */
 .inspection-split.phoenix-three{grid-template-columns:repeat(3,minmax(0,1fr))}
 .inspection-split .phoenix-status>div svg,.inspection-split .phoenix-status>strong{color:#b08cff}
+.location.repair-inspection,.due.repair-inspection{color:#d7c2ff;border-color:rgba(176,140,255,.45);background:rgba(176,140,255,.12)}
 @media(max-width:1200px){.inspection-split.phoenix-three{grid-template-columns:1fr}}
