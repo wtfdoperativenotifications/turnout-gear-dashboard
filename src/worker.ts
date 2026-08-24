@@ -165,6 +165,10 @@ function requiresAnnualInspection(asset: Pick<GearAsset, "gearType">): boolean {
   return asset.gearType === "Coat" || asset.gearType === "Pant";
 }
 
+function isPhoenixAsset(asset: Pick<GearAsset, "currentLocation" | "assignedTo">): boolean {
+  return /phoenix\s*gear\s*repair\s*supply\s*room/i.test(`${asset.currentLocation} ${asset.assignedTo}`);
+}
+
 function normalizeLocationType(rawType: string, currentLocation: string, issuedTo: string): LocationType {
   const direct = rawType.trim().toLowerCase();
   const combined = `${currentLocation} ${issuedTo}`.toLowerCase();
@@ -374,7 +378,6 @@ async function loadLegacyPreview(env: Env, auth: { headers: Headers; mode: strin
   }
 }
 
-
 function safePreviewValue(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "string") return value.length > 240 ? `${value.slice(0, 240)}…` : value;
@@ -453,7 +456,6 @@ async function loadGear(env: Env): Promise<{ gear: GearAsset[]; source: string; 
   return legacy;
 }
 
-
 function emptySupplyInventory(note = "Supply inventory has not been loaded."): SupplyInventoryPayload {
   return { success:false, mode:"READ_ONLY_SUPPLY_INVENTORY_PREVIEW", sourceEndpoint:"", count:0, totals:{skuCount:0,totalOnHand:0,lowStock:0,outOfStock:0,quantityUnavailable:0}, inventory:[], note };
 }
@@ -511,7 +513,9 @@ function replacementPriority(gear: GearAsset[]): ReplacementItem[] {
 function dashboard(gear: GearAsset[], source: string, diagnostic: SourceDiagnostic, lookaheadDays: number, supplyInventory: SupplyInventoryPayload): DashboardPayload {
   const currentYear = new Date().getFullYear();
   // Department policy: only structural coats and pants receive the annual inspection.
-  const inspectionGear = gear.filter(requiresAnnualInspection);
+  // Gear transferred to Phoenix Gear Repair is already in the repair/inspection workflow,
+  // so it is excluded from active due/overdue workload until it returns.
+  const inspectionGear = gear.filter(x => requiresAnnualInspection(x) && !isPhoenixAsset(x));
   const maintenanceDue = inspectionGear.filter(x => x.daysUntilDue !== null && x.daysUntilDue <= lookaheadDays).sort((a,b)=>(a.daysUntilDue??9999)-(b.daysUntilDue??9999));
   const coverage = memberCoverage(gear);
   const forecast = Array.from({ length: 10 }, (_, i) => ({ year: currentYear + i, coats: 0, pants: 0, other: 0 }));
@@ -535,7 +539,7 @@ function dashboard(gear: GearAsset[], source: string, diagnostic: SourceDiagnost
       compliant: inspectionGear.filter(x=>x.status==="Compliant").length,
       retiringThisYear: gear.filter(x=>x.retirementDate&&new Date(x.retirementDate).getFullYear()===currentYear).length,
       retiringNext3Years: gear.filter(x=>x.retirementDate&&new Date(x.retirementDate).getFullYear()>=currentYear&&new Date(x.retirementDate).getFullYear()<=currentYear+2).length,
-      warehouseItems: gear.filter(x=>x.locationType==="Warehouse").length,
+      warehouseItems: gear.filter(x=>x.locationType==="Warehouse"&&!isPhoenixAsset(x)).length,
       reserveItems: gear.filter(x=>x.locationType==="Reserve").length,
       stationItems: gear.filter(x=>x.locationType==="Station").length,
       missingLocation: gear.filter(x=>x.currentLocation==="Unknown").length,
@@ -548,7 +552,7 @@ function dashboard(gear: GearAsset[], source: string, diagnostic: SourceDiagnost
       missingInServiceDate: gear.filter(x=>!x.inServiceDate).length
     },
     maintenanceDue, allAssets: gear, memberCoverage: coverage,
-    warehouseInventory: gear.filter(x=>x.locationType==="Warehouse"||x.locationType==="Reserve"),
+    warehouseInventory: gear.filter(x=>!isPhoenixAsset(x)&&(x.locationType==="Warehouse"||x.locationType==="Reserve")),
     replacementPriority: replacementPriority(gear), decommissionForecast: forecast, supplyInventory
   };
 }

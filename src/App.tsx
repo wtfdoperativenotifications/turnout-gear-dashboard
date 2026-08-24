@@ -4,6 +4,7 @@ import {
   Code2, Database, PackageOpen, RefreshCw, Search, Shield, Users, Warehouse, Wrench, X, Info
 } from "lucide-react";
 import type { DashboardPayload, GearAsset, MemberCoverage, SupplyPart, SupplyProbePayload } from "./types";
+import "./phoenix.css";
 
 type View = "today" | "readiness" | "inspection" | "assets" | "supplies" | "members" | "warehouse" | "planning" | "explorer";
 type InspectionPreset = "all" | "overdue" | "today" | "1-7" | "8-30";
@@ -16,7 +17,8 @@ const date = (v:string|null) => v ? fmt.format(new Date(v)) : "—";
 const dueText = (days:number|null) => days === null ? "No service date" : days < 0 ? `${Math.abs(days)} days overdue` : days === 0 ? "Due today" : `Due in ${days} days`;
 const retirementDays = (asset:GearAsset) => asset.retirementDate ? Math.ceil((new Date(asset.retirementDate).getTime()-Date.now())/86_400_000) : null;
 const requiresAnnualInspection = (asset:GearAsset) => asset.gearType === "Coat" || asset.gearType === "Pant";
-const isWarehouseAsset = (asset:GearAsset) => asset.locationType === "Warehouse" || /turnout\s*gear\s*supply\s*warehouse/i.test(`${asset.currentLocation} ${asset.assignedTo}`);
+const isPhoenixAsset = (asset:GearAsset) => /phoenix\s*gear\s*repair\s*supply\s*room/i.test(`${asset.currentLocation} ${asset.assignedTo}`);
+const isWarehouseAsset = (asset:GearAsset) => !isPhoenixAsset(asset) && (asset.locationType === "Warehouse" || /turnout\s*gear\s*supply\s*warehouse/i.test(`${asset.currentLocation} ${asset.assignedTo}`));
 
 function Metric({label,value,icon:Icon,tone,unit="items",onClick,active=false}:{label:string;value:number;icon:typeof Shield;tone:string;unit?:string;onClick?:()=>void;active?:boolean}){
   return <button type="button" className={`metric ${tone}${onClick?" metric-clickable":""}${active?" metric-active":""}`} onClick={onClick} disabled={!onClick}><Icon/><div><span>{label}</span><strong>{value}</strong><small>{unit}</small></div>{onClick&&<ChevronRight className="metric-arrow"/>}</button>;
@@ -54,8 +56,8 @@ export function App(){
 
   const all=data?.allAssets||[];
   const filtered=all.filter(i=>`${i.assetDescription} ${i.gearType} ${i.manufacturer} ${i.model} ${i.assignedTo} ${i.currentLocation} ${i.locationType} ${i.assetTag} ${i.serialNumber} ${i.barcode} ${i.size}`.toLowerCase().includes(query.toLowerCase())&&(locationFilter==="All locations"||i.locationType===locationFilter)&&(gearFilter==="All gear"||i.gearType===gearFilter));
-  const due=filtered.filter(i=>requiresAnnualInspection(i)&&i.daysUntilDue!==null&&i.daysUntilDue<=(data?.lookaheadDays||30)).sort((a,b)=>(a.daysUntilDue??9999)-(b.daysUntilDue??9999));
-  const inspectionItems=[...filtered.filter(requiresAnnualInspection)].filter(i=>{
+  const due=filtered.filter(i=>!isPhoenixAsset(i)&&requiresAnnualInspection(i)&&i.daysUntilDue!==null&&i.daysUntilDue<=(data?.lookaheadDays||30)).sort((a,b)=>(a.daysUntilDue??9999)-(b.daysUntilDue??9999));
+  const inspectionItems=[...filtered.filter(i=>requiresAnnualInspection(i)&&!isPhoenixAsset(i))].filter(i=>{
     if(inspectionScope==="warehouse"&&!isWarehouseAsset(i)) return false;
     if(inspectionScope==="issued"&&isWarehouseAsset(i)) return false;
     const d=i.daysUntilDue;
@@ -69,8 +71,9 @@ export function App(){
   const maxForecast=Math.max(1,...(data?.decommissionForecast||[]).map(x=>x.coats+x.pants+x.other));
   // Reserve Inventory must use the full source dataset, not the global search-filtered list.
   // This keeps the summary cards, size chart, manufacturer chart, and table in sync.
+  const phoenixItems=useMemo(()=>all.filter(isPhoenixAsset),[all]);
   const warehouseItems=useMemo(()=>all.filter(i=>isWarehouseAsset(i)),[all]);
-  const reserveItems=useMemo(()=>all.filter(i=>i.locationType==="Reserve"),[all]);
+  const reserveItems=useMemo(()=>all.filter(i=>i.locationType==="Reserve"&&!isPhoenixAsset(i)),[all]);
   const memberRows=useMemo(()=>data?.memberCoverage.map(m=>({...m,readiness:readinessFor(m)}))||[],[data]);
   const readinessCounts=useMemo(()=>({ready:memberRows.filter(m=>m.readiness.level==="Ready").length,monitor:memberRows.filter(m=>m.readiness.level==="Monitor").length,attention:memberRows.filter(m=>m.readiness.level==="Attention").length,due30:memberRows.filter(m=>m.assets.some(a=>requiresAnnualInspection(a)&&a.daysUntilDue!==null&&a.daysUntilDue<=30)).length,retiring:memberRows.filter(m=>m.assets.some(a=>{const d=retirementDays(a);return d!==null&&d<=365})).length}),[memberRows]);
   const readinessDisplayRows=memberRows.filter(m=>{
@@ -88,8 +91,8 @@ export function App(){
   const inspectionTitle={all:"All annual-inspection gear",overdue:"Overdue annual inspections",today:"Annual inspections due today","1-7":"Annual inspections due in 1–7 days","8-30":"Annual inspections due in 8–30 days"}[inspectionPreset];
   const scopeTitle={all:"All locations",issued:"Issued gear",warehouse:"Warehouse gear"}[inspectionScope];
   const warehouseByType=useMemo(()=>{const map=new Map<string,number>();for(const item of warehouseItems){if(item.gearType!=="Coat"&&item.gearType!=="Pant")continue;const size=item.size?.trim()||"Size not listed";const key=`${item.gearType} · ${size}`;map.set(key,(map.get(key)||0)+1)}return [...map.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]))},[warehouseItems]);
-  const dueWithin48=all.filter(i=>requiresAnnualInspection(i)&&i.daysUntilDue!==null&&i.daysUntilDue>=0&&i.daysUntilDue<=2).length;
-  const inspectionDue30=all.filter(i=>requiresAnnualInspection(i)&&i.daysUntilDue!==null&&i.daysUntilDue<=30);
+  const dueWithin48=all.filter(i=>!isPhoenixAsset(i)&&requiresAnnualInspection(i)&&i.daysUntilDue!==null&&i.daysUntilDue>=0&&i.daysUntilDue<=2).length;
+  const inspectionDue30=all.filter(i=>!isPhoenixAsset(i)&&requiresAnnualInspection(i)&&i.daysUntilDue!==null&&i.daysUntilDue<=30);
   const issuedDue30=inspectionDue30.filter(i=>!isWarehouseAsset(i));
   const warehouseDue30=inspectionDue30.filter(isWarehouseAsset);
   const issuedOverdue=issuedDue30.filter(i=>(i.daysUntilDue??0)<0).length;
@@ -123,7 +126,7 @@ export function App(){
   {error&&<div className="notice error"><AlertTriangle/><b>{error}</b></div>}
 
   {view==="today"&&data?.liveData&&<><section className="briefing"><div><p className="eyebrow">TODAY'S OPERATIONAL BRIEFING</p><h2>{data.metrics.overdue>0?`Immediate action required: ${data.metrics.overdue} turnout garments are overdue for annual inspection.`:`Overall inspection status is current.`}</h2><p><b>{data.metrics.dueNext7Days}</b> inspections are due this week, with <b>{data.metrics.due8To30Days}</b> additional inspections due this month. <b>{issuedDue30.length}</b> are issued and <b>{warehouseDue30.length}</b> are warehouse stock.</p></div><div className="workload"><small>ESTIMATED WORKLOAD</small><strong>{estimatedWork}</strong><span>≈ {inspectionDue30.length} inspections · Issued {formatMinutes(issuedMinutes)} · Warehouse {formatMinutes(warehouseMinutes)}</span></div></section>
-  <section className="inspection-split"><button onClick={()=>openInspection("all","issued")}><div><Users/><span>ISSUED GEAR DUE</span></div><strong>{issuedDue30.length}</strong><small>{issuedOverdue} overdue · {formatMinutes(issuedMinutes)} workload</small><ChevronRight/></button><button onClick={()=>openInspection("all","warehouse")}><div><Warehouse/><span>WAREHOUSE GEAR DUE</span></div><strong>{warehouseDue30.length}</strong><small>{warehouseOverdue} overdue · {formatMinutes(warehouseMinutes)} workload</small><ChevronRight/></button></section>
+  <section className="inspection-split phoenix-three"><button onClick={()=>openInspection("all","issued")}><div><Users/><span>ISSUED GEAR DUE</span></div><strong>{issuedDue30.length}</strong><small>{issuedOverdue} overdue · {formatMinutes(issuedMinutes)} workload</small><ChevronRight/></button><button onClick={()=>openInspection("all","warehouse")}><div><Warehouse/><span>WAREHOUSE GEAR DUE</span></div><strong>{warehouseDue30.length}</strong><small>{warehouseOverdue} overdue · {formatMinutes(warehouseMinutes)} workload</small><ChevronRight/></button><button className="phoenix-status" onClick={()=>{setQuery("Phoenix Gear Repair Supply Room");setLocationFilter("All locations");setGearFilter("All gear");setView("assets")}}><div><Wrench/><span>OUT FOR REPAIR / INSPECTION</span></div><strong>{phoenixItems.length}</strong><small>Phoenix Gear Repair · excluded from due queue</small><ChevronRight/></button></section>
   <section className="metrics seven"><Metric label="Overdue" value={data.metrics.overdue} icon={AlertTriangle} tone="red" onClick={()=>openInspection("overdue")}/><Metric label="Due today" value={data.metrics.dueToday} icon={Clock3} tone="orange" onClick={()=>openInspection("today")}/><Metric label="Due 1–7 days" value={data.metrics.dueNext7Days} icon={CalendarClock} tone="yellow" onClick={()=>openInspection("1-7")}/><Metric label="Due this month" value={data.metrics.due8To30Days} icon={CalendarClock} tone="amber" onClick={()=>openInspection("8-30")}/><Metric label="Fully equipped" value={readinessCounts.ready} icon={CheckCircle2} tone="green" unit="members" onClick={()=>openMembers("ready")}/><Metric label="Gear deficiencies" value={readinessCounts.attention+readinessCounts.monitor} icon={Users} tone="purple" unit="members" onClick={()=>openMembers("attention")}/><Metric label="Warehouse stock" value={data.metrics.warehouseItems} icon={Warehouse} tone="blue" onClick={()=>setView("warehouse")}/></section>
   <section className="panel primary"><PanelHead eyebrow="INSPECTION WORK QUEUE" title="Annual inspections due in the next 30 days" count={due.length}/><Toolbar query={query} setQuery={setQuery} location={locationFilter} setLocation={setLocationFilter} gear={gearFilter} setGear={setGearFilter}/><AssetTable items={due} onSelect={setSelectedAsset}/></section>
   <section className="bottom-grid"><Forecast data={data} max={maxForecast}/><DataStatus data={data}/></section></>}
