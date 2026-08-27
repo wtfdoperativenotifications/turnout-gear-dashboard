@@ -102,7 +102,7 @@ export function App(){
   const formatMinutes=(minutes:number)=>minutes<60?`${minutes} min`:`${Math.floor(minutes/60)} hr ${minutes%60} min`;
   const warehouseCounts=useMemo(()=>{const counts:Record<string,number>={Coat:0,Pant:0,Helmet:0,Boots:0,Hood:0,Gloves:0,Other:0};for(const item of warehouseItems){const key=Object.prototype.hasOwnProperty.call(counts,item.gearType)?item.gearType:"Other";counts[key]=(counts[key]||0)+1}return counts},[warehouseItems]);
   const warehouseManufacturers=useMemo(()=>{const map=new Map<string,number>();for(const item of warehouseItems){const name=item.manufacturer||"Manufacturer not listed";map.set(name,(map.get(name)||0)+1)}return [...map.entries()].sort((a,b)=>b[1]-a[1]).slice(0,8)},[warehouseItems]);
-  const estimatedMinutes=(data?.metrics.dueNext30Days||0)*5;
+  const estimatedMinutes=issuedMinutes+warehouseMinutes;
   const estimatedWork=estimatedMinutes<60?`${estimatedMinutes} minutes`:`${Math.floor(estimatedMinutes/60)} hr ${estimatedMinutes%60} min`;
   const budgetRows=(data?.decommissionForecast||[]).slice(0,5).map(x=>({...x,cost:x.coats*coatCost+x.pants*pantCost}));
   const supplyPriority:Record<SupplyPart["status"],number>={"Out of stock":0,"Low stock":1,"Near minimum":2,"Quantity unavailable":3,"In stock":4};
@@ -146,9 +146,9 @@ export function App(){
 
   {view==="explorer"&&<section className="panel explorer-panel"><PanelHead eyebrow="RAW SOURCE INSPECTION" title="Data Explorer" count={explorer?.recordCount||0}/>{explorerLoading&&<div className="notice"><RefreshCw className="spin"/>Loading source fields…</div>}{explorerError&&<div className="notice error"><AlertTriangle/>{explorerError}</div>}{explorer&&<><div className="explorer-meta"><div><small>Records</small><strong>{explorer.recordCount}</strong></div><div><small>Detected path</small><strong>{explorer.discoveredPath}</strong></div><div><small>Source</small><strong>{explorer.source}</strong></div></div><div className="explorer-grid"><article><h3>Field coverage</h3><div className="field-list">{explorer.fieldSummary.map(f=><div className="field-row" key={f.path}><code>{f.path}</code><span>{f.present}/{explorer.recordCount}</span><small>{f.samples.join(" · ")||"—"}</small></div>)}</div></article><article><h3>Sanitized sample records</h3>{explorer.records.map(r=><details className="record-card" key={r.index}><summary>Record {r.index}</summary><div>{r.fields.map(f=><div className="record-field" key={f.path}><code>{f.path}</code><span>{f.value}</span></div>)}</div></details>)}</article></div></>}</section>}
   </main>
-  {selectedMember&&<MemberModal member={selectedMember} warehouseItems={warehouseItems} onSelectAsset={asset=>{setSelectedMember(null);setSelectedAsset(asset)}} onClose={()=>setSelectedMember(null)}/>}
-  {selectedAsset&&<AssetModal asset={selectedAsset} onClose={()=>setSelectedAsset(null)}/>}
-  {selectedSupply&&<SupplyModal item={selectedSupply} onClose={()=>setSelectedSupply(null)}/>}</div>;
+  {selectedMember&&<MemberModal member={selectedMember} warehouseItems={warehouseItems} onSelectAsset={asset=>{setSelectedMember(null);setSelectedAsset(asset)}} onClose={()=>setSelectedMember(null)}/>} 
+  {selectedAsset&&<AssetModal asset={selectedAsset} onClose={()=>setSelectedAsset(null)}/>} 
+  {selectedSupply&&<SupplyModal item={selectedSupply} onClose={()=>setSelectedSupply(null)}/>} </div>;
 }
 
 function PanelHead({eyebrow,title,count}:{eyebrow:string;title:string;count?:number}){return <div className="panel-head"><div><p className="eyebrow">{eyebrow}</p><h2>{title}</h2></div>{count!==undefined&&<div className="count">{count}<small>records</small></div>}</div>}
