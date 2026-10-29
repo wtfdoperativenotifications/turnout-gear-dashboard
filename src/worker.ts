@@ -398,7 +398,7 @@ function explorerFields(record: JsonRecord): Array<{ path: string; value: string
     .map(([path, value]) => ({ path, value: safePreviewValue(value) }));
 }
 
-async function loadDataExplorer(env: Env): Promise<{ ok: boolean; status: number; body: unknown }> {
+async function loadDataExplorer(env: Env, search = ""): Promise<{ ok: boolean; status: number; body: unknown }> {
   const auth = authHeaders(env);
   const sourceUrl = env.TURNOUT_GEAR_SOURCE_URL;
   if (!sourceUrl) return { ok: false, status: 503, body: { message: "TURNOUT_GEAR_SOURCE_URL is not configured." } };
@@ -409,6 +409,8 @@ async function loadDataExplorer(env: Env): Promise<{ ok: boolean; status: number
     const discovered = discoverRecords(result.payload);
     if (!discovered.rows.length) return { ok: false, status: 502, body: { message: "No record array was found in the source payload.", topLevelKeys: isRecord(result.payload) ? Object.keys(result.payload).slice(0, 40) : [] } };
     const rows = discovered.rows;
+    const query = search.trim().toLowerCase();
+    const matchedRows = query ? rows.filter(row => explorerFields(row).some(field => field.value.toLowerCase().includes(query))) : rows;
     const coverage = new Map<string, { present: number; samples: string[] }>();
     for (const row of rows) {
       const seen = new Set<string>();
@@ -429,7 +431,7 @@ async function loadDataExplorer(env: Env): Promise<{ ok: boolean; status: number
     return { ok: true, status: 200, body: {
       generatedAt: new Date().toISOString(), source: sourceUrl, discoveredPath: discovered.path,
       recordCount: rows.length, topLevelKeys: isRecord(result.payload) ? Object.keys(result.payload).slice(0, 40) : [],
-      fieldSummary, records: rows.slice(0, 5).map((row, index) => ({ index: index + 1, fields: explorerFields(row) }))
+      fieldSummary, matchedCount: matchedRows.length, records: matchedRows.slice(0, 20).map((row, index) => ({ index: index + 1, fields: explorerFields(row) }))
     } };
   } catch (error) {
     return { ok: false, status: 502, body: { message: error instanceof Error ? error.message : "Unable to inspect source payload." } };
@@ -564,7 +566,7 @@ export default {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api/") && !authorized(request, env)) return json({ error: "Unauthorized" }, { status: 401 });
     if (url.pathname === "/api/health") return json({ ok: true, service: "turnout-gear-dashboard", version: "19.0.0", time: new Date().toISOString() });
-    if (url.pathname === "/api/data-explorer") { const result = await loadDataExplorer(env); return json(result.body, { status: result.status }); }
+    if (url.pathname === "/api/data-explorer") { const result = await loadDataExplorer(env, url.searchParams.get("search") || ""); return json(result.body, { status: result.status }); }
     if (url.pathname === "/api/supply-diagnostic") {
       if (!env.TURNOUT_GEAR_SOURCE_URL) return json({error:"TURNOUT_GEAR_SOURCE_URL is not configured."},{status:500});
       const probeUrl = env.TURNOUT_GEAR_SOURCE_URL.replace(/\/preview-turnout-gear(?:\?.*)?$/i, "/probe-supply-inventory");
