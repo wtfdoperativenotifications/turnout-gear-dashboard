@@ -557,12 +557,80 @@ function dashboard(gear: GearAsset[], source: string, diagnostic: SourceDiagnost
   };
 }
 
+
+async function runGearAudit(env: Env): Promise<unknown> {
+  if (!env.TURNOUT_GEAR_SOURCE_URL) throw new Error("Turnout source is not configured.");
+  const sourceUrl = new URL(env.TURNOUT_GEAR_SOURCE_URL);
+  sourceUrl.pathname = "/audit/turnout-inventory";
+  sourceUrl.search = "";
+  const [raw, displayed] = await Promise.all([fetchJson(sourceUrl.toString(), authHeaders(env).headers), loadGear(env)]);
+  const inventory = raw.payload as {success?:boolean;generatedAt?:string;sourceRecords?:number;exclusions?:unknown;assets?:Array<{assetTag:string;serialNumber:string;assetDescription:string;gearType:string;currentLocation:string;member:string}>};
+  if (!raw.response.ok || !inventory?.success || !Array.isArray(inventory.assets)) throw new Error("Independent inventory audit is unavailable (HTTP " + raw.response.status + ").");
+  if (!displayed.diagnostic.ok) throw new Error(displayed.diagnostic.message);
+  const normalizeText = (value:string) => value.trim().toLowerCase().replace(/\s+/g," ");
+  const identity = (asset:{gearType:string;serialNumber:string;assetTag:string}) => asset.gearType + ":" + normalizeText(asset.serialNumber || asset.assetTag);
+  const structural = displayed.gear.filter(requiresAnnualInspection);
+  const expected = new Map<string,typeof inventory.assets[number]>();
+  const actual = new Map<string,GearAsset>();
+  const sourceDuplicates:unknown[] = [], dashboardDuplicates:unknown[] = [];
+  for (const asset of inventory.assets) {
+    const id = identity(asset);
+    if (expected.has(id)) sourceDuplicates.push({first:expected.get(id),duplicate:asset});
+    else expected.set(id,asset);
+  }
+  for (const asset of structural) {
+    const id = identity(asset);
+    if (actual.has(id)) dashboardDuplicates.push({first:actual.get(id),duplicate:asset});
+    else actual.set(id,asset);
+  }
+  const missing:unknown[] = [], unexpected:unknown[] = [], assignmentDifferences:unknown[] = [];
+  for (const [id,asset] of expected) {
+    const match = actual.get(id);
+    if (!match) {missing.push(asset);continue;}
+    const member = match.locationType === "Issued to Member" ? match.assignedTo : "";
+    if (normalizeText(asset.member) !== normalizeText(member) || normalizeText(asset.currentLocation) !== normalizeText(match.currentLocation))
+      assignmentDifferences.push({assetTag:asset.assetTag,serialNumber:asset.serialNumber,sourceMember:asset.member,dashboardMember:member,sourceLocation:asset.currentLocation,dashboardLocation:match.currentLocation});
+  }
+  for (const [id,asset] of actual) if (!expected.has(id)) unexpected.push(asset);
+  const sourceMembers = new Map<string,{member:string;coats:number;pants:number;assets:string[]}>();
+  for (const asset of expected.values()) {
+    if (!asset.member) continue;
+    const id = normalizeText(asset.member);
+    const row = sourceMembers.get(id) || {member:asset.member,coats:0,pants:0,assets:[]};
+    if (asset.gearType === "Coat") row.coats++; else row.pants++;
+    row.assets.push(asset.assetTag);sourceMembers.set(id,row);
+  }
+  const displayedMembers = memberCoverage(displayed.gear);
+  const memberCounts = [...sourceMembers.values()].map(row => {
+    const match = displayedMembers.find(member=>normalizeText(member.member)===normalizeText(row.member));
+    return {...row,dashboardCoats:match?.coats||0,dashboardPants:match?.pants||0,
+      countsMatch:row.coats===(match?.coats||0)&&row.pants===(match?.pants||0),
+      sourceCoverage:row.coats>=2&&row.pants>=2?"Complete":"Incomplete",
+      dashboardCoverage:match?.status||"Member missing"};
+  }).sort((a,b)=>a.member.localeCompare(b.member));
+  return {generatedAt:new Date().toISOString(),sourceCapturedAt:inventory.generatedAt,readOnly:true,
+    scope:"All active structural coats and pants, including warehouse and repair locations; independent OperativeIQ inventory compared with the dashboard feed.",
+    sourceRecords:inventory.sourceRecords,sourceExclusions:inventory.exclusions,
+    totals:{sourceGarments:expected.size,dashboardGarments:actual.size,sourceMembers:sourceMembers.size,dashboardMembers:displayedMembers.length,
+      missing:missing.length,unexpected:unexpected.length,assignmentDifferences:assignmentDifferences.length,sourceDuplicates:sourceDuplicates.length,dashboardDuplicates:dashboardDuplicates.length,
+      memberCountDifferences:memberCounts.filter(row=>!row.countsMatch).length,
+      incompleteMembers:memberCounts.filter(row=>row.sourceCoverage==="Incomplete").length,
+      falseMissingGearWarnings:memberCounts.filter(row=>row.sourceCoverage==="Complete"&&row.dashboardCoverage!=="Compliant").length},
+    missing,unexpected,assignmentDifferences,sourceDuplicates,dashboardDuplicates,
+    incompleteMembers:memberCounts.filter(row=>row.sourceCoverage==="Incomplete"),members:memberCounts,
+    note:"Counts confirm recorded assignments only; they do not confirm the physical condition or suitability of the gear."};
+}
+
 function authorized(request: Request, env: Env): boolean { return !env.DASHBOARD_ACCESS_KEY || request.headers.get("x-dashboard-key") === env.DASHBOARD_ACCESS_KEY; }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api/") && !authorized(request, env)) return json({ error: "Unauthorized" }, { status: 401 });
+    if (url.pathname === "/api/gear-audit") {
+      try {return json(await runGearAudit(env));}
+      catch (error) {return json({error:error instanceof Error?error.message:"Gear audit failed"},{status:502});}
+    }
     if (url.pathname === "/api/health") return json({ ok: true, service: "turnout-gear-dashboard", version: "19.0.0", time: new Date().toISOString() });
     if (url.pathname === "/api/data-explorer") { const result = await loadDataExplorer(env); return json(result.body, { status: result.status }); }
     if (url.pathname === "/api/supply-diagnostic") {
